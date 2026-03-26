@@ -3,32 +3,41 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chatbot</title>
+<title>Chatbot(Hybrid)</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <div class="app">
     <aside class="sidebar">
-      <div class="panel">
-        <div class="panel-title">Upload Documents</div>
-        <input type="file" id="fileInput" multiple />
-        <button id="uploadBtn" class="primary-btn" type="button">Upload Files</button>
+      <div class="upload-section">
+        <!-- <input type="file" id="pdfFile" accept="application/pdf" /> -->
+        <input type="file" id="pdfFile" accept="application/pdf" multiple />
+        <button id="uploadBtn" class="primary-btn" type="button">Upload PDF</button>
+          <!--Loader goes here -->
+      <div id="uploadLoader" style="display: none; margin-top: 10px;">
+        Uploading...
       </div>
-
-      <div class="panel">
-        <div class="panel-title">Uploaded Files</div>
         <ul id="fileList" class="list"></ul>
+        <div class="upload-info">
+          Uploaded files
+        </div>
       </div>
-
       <div class="panel">
-        <div class="panel-title">Chat History</div>
+        <div class="panel-title panel-title-row">
+          <span>Chat History</span>
+          <button id="clearAllChatsBtn" class="ghost-btn" type="button" title="Clear all chats">Clear</button>
+        </div>
+        <button id="newChatBtn" class="icon-add-btn" type="button" title="Add New Chat">
+          +
+        </button>
         <ul id="historyList" class="list"></ul>
+
       </div>
     </aside>
 
     <main class="chat-area">
       <div class="header">
-        <div class="title">Chatbot</div>
+        <div class="title">Chatbot(Vector Search & Vector Less Search)</div>
         <div class="subtitle">Ask questions</div>
       </div>
 
@@ -41,6 +50,11 @@
     </main>
   </div>
 
-  <script src="/static/script.js"></script>
+  <script src="/static/script.js"></script>  
+  <div id="globalLoader" class="global-loader" style="display:none;">
+    <div class="loader-box">
+      Uploading files...
+    </div>
+  </div> 
 </body>
 </html>
