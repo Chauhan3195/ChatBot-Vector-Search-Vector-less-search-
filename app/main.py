@@ -3,23 +3,29 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse , JSONResponse
 from pydantic import BaseModel
 from app.rag import get_rag_chain
-import os
-import logging 
-import shutil
+import hashlib  ,json , os , logging , shutil 
 from app.cache import get_cached_response, set_cached_response
 from app.precompute_embeddings import build_index
 from typing import List
 
-# Make a folder for logs
-os.makedirs("logs", exist_ok=True)
 
-# Configure logging
+# Make a folder for logs
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_FILE = os.path.join(BASE_DIR, "logs", "app.log")
+
+os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+
 logging.basicConfig(
-    filename="logs/app_errors.log",   # log file path
-    level=logging.ERROR,              # log only errors and above
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(funcName)s - %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE),
+        logging.StreamHandler()  # also print to console
+    ],
     force=True
 )
+
+logger = logging.getLogger("chatbot_app")
 
 application = FastAPI()
 
@@ -34,7 +40,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"message": "An internal error occurred. Check logs for details."}
     )
 
-# chat_history = []
+chat_history = []
 
 application.mount("/static", StaticFiles(directory="app/static"), name="static")
 
@@ -55,7 +61,40 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 print("UPLOAD DIR:", UPLOAD_DIR)  # debug
 
 #### end of added
+# Keep a dictionary to store file hashes (you could also persist in a JSON/db)
+# Store uploaded file hashes
+HASH_FILE = "uploaded_hashes.json"
 
+# Load existing hashes at startup
+if os.path.exists(HASH_FILE):
+    with open(HASH_FILE, "r") as f:
+        uploaded_file_hashes = json.load(f)
+else:
+    uploaded_file_hashes = {}
+
+def save_hashes():
+    with open(HASH_FILE, "w") as f:
+        json.dump(uploaded_file_hashes, f, indent=2)
+
+def get_file_hash(file: UploadFile) -> str:
+    """Compute SHA256 hash of uploaded file without reading entire content in memory."""
+    hash_sha256 = hashlib.sha256()
+    file.file.seek(0)  # Ensure reading from start
+    for chunk in iter(lambda: file.file.read(4096), b""):
+        hash_sha256.update(chunk)
+    file.file.seek(0)  # Reset for saving later
+    return hash_sha256.hexdigest()
+
+def check_duplicate(file: UploadFile) -> bool:
+    """Return True if file already uploaded (by content)."""
+    file_hash = get_file_hash(file)
+    return file_hash in uploaded_file_hashes.values()
+
+def register_file(file: UploadFile):
+    """Save file hash to dict and persist to disk."""
+    file_hash = get_file_hash(file)
+    uploaded_file_hashes[file.filename] = file_hash
+    save_hashes()
 
 @application.post("/upload")
 async def upload_file(files: List[UploadFile] = File(...)):
@@ -63,16 +102,21 @@ async def upload_file(files: List[UploadFile] = File(...)):
         saved_files = []
 
         for file in files:
+            if check_duplicate(file):
+                return {"message": f"File '{file.filename}' already uploaded."}
             file_path = os.path.join(UPLOAD_DIR, file.filename)
 
             # optional: avoid overwrite
-            if os.path.exists(file_path):
-                base, ext = os.path.splitext(file.filename)
-                file_path = os.path.join(UPLOAD_DIR, f"{base}_new{ext}")
+            # if os.path.exists(file_path):
+            #     base, ext = os.path.splitext(file.filename)
+            #     file_path = os.path.join(UPLOAD_DIR, f"{base}_new{ext}")
 
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
+            # Register hash
+            register_file(file)
+            
             print(f"File {file.filename} saved at {file_path}")
             saved_files.append(file.filename)
 
@@ -164,3 +208,25 @@ async def delete_file(filename: str):
         rag_chain = get_rag_chain()
 
     return {"message": "Deleted"}
+
+
+from fastapi import Request
+import time
+
+@application.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    
+    # Log request start
+    logger.info(f"Request start: {request.method} {request.url.path}")
+
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        logger.error(f"Request failed: {request.method} {request.url.path} - {e}", exc_info=True)
+        raise e
+
+    process_time = time.time() - start_time
+    logger.info(f"Request end: {request.method} {request.url.path} - Status {response.status_code} - Time {process_time:.3f}s")
+
+    return response
