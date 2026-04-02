@@ -7,6 +7,11 @@ import hashlib  ,json , os , logging , shutil
 from app.cache import get_cached_response, set_cached_response
 from app.precompute_embeddings import build_index
 from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+
+
+
+
 
 
 # Make a folder for logs
@@ -28,6 +33,15 @@ logging.basicConfig(
 logger = logging.getLogger("chatbot_app")
 
 application = FastAPI()
+    #CORS Configuration
+application.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4200"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+#
 
 @application.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -63,14 +77,38 @@ print("UPLOAD DIR:", UPLOAD_DIR)  # debug
 #### end of added
 # Keep a dictionary to store file hashes (you could also persist in a JSON/db)
 # Store uploaded file hashes
-HASH_FILE = "uploaded_hashes.json"
+# HASH_FILE = "uploaded_hashes.json"
 
-# Load existing hashes at startup
-if os.path.exists(HASH_FILE):
-    with open(HASH_FILE, "r") as f:
-        uploaded_file_hashes = json.load(f)
-else:
-    uploaded_file_hashes = {}
+# # Load existing hashes at startup
+# if os.path.exists(HASH_FILE):
+#     with open(HASH_FILE, "r") as f:
+#         uploaded_file_hashes = json.load(f)
+# else:
+#     uploaded_file_hashes = {}
+HASH_FILE = "uploaded_hashes.json"
+# HASH_FILE = os.path.join(BASE_DIR, "uploaded_hashes.json")
+
+def load_hashes():
+    # If file does not exist → create it
+    if not os.path.exists(HASH_FILE):
+        with open(HASH_FILE, "w") as f:
+            json.dump({}, f)
+        return {}
+
+    try:
+        # If file exists but empty → return empty dict
+        if os.path.getsize(HASH_FILE) == 0:
+            logger.warning("Hash file empty → initializing empty dict")
+            return {}
+
+        with open(HASH_FILE, "r") as f:
+            return json.load(f)
+
+    except json.JSONDecodeError:
+        logger.error("Invalid JSON in hash file → resetting", exc_info=True)
+        return {}
+    
+uploaded_file_hashes = load_hashes()
 
 def save_hashes():
     with open(HASH_FILE, "w") as f:
@@ -100,17 +138,13 @@ def register_file(file: UploadFile):
 async def upload_file(files: List[UploadFile] = File(...)):
     try:
         saved_files = []
+        skipped_files = []
 
         for file in files:
             if check_duplicate(file):
-                return {"message": f"File '{file.filename}' already uploaded."}
+                        skipped_files.append(file.filename)
+                        continue
             file_path = os.path.join(UPLOAD_DIR, file.filename)
-
-            # optional: avoid overwrite
-            # if os.path.exists(file_path):
-            #     base, ext = os.path.splitext(file.filename)
-            #     file_path = os.path.join(UPLOAD_DIR, f"{base}_new{ext}")
-
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
 
@@ -120,14 +154,23 @@ async def upload_file(files: List[UploadFile] = File(...)):
             print(f"File {file.filename} saved at {file_path}")
             saved_files.append(file.filename)
 
+        if saved_files:
+            build_index()
+            global rag_chain
+            rag_chain = get_rag_chain()
+
         # Build index ONCE after all uploads
-        build_index()
+        # build_index()
 
-        #  Reinitialize RAG
-        global rag_chain
-        rag_chain = get_rag_chain()
+        # #  Reinitialize RAG
+        # global rag_chain
+        # rag_chain = get_rag_chain()
 
-        return {"message": f"{len(saved_files)} files uploaded successfully", "files": saved_files}
+        # return {"message": f"{len(saved_files)} files uploaded successfully", "files": saved_files}
+        if skipped_files:
+            return {"message": f"File already uploaded: {', '.join(skipped_files)}"}
+
+        return {"message": f"{len(saved_files)} file(s) uploaded successfully", "files": saved_files}
 
     except Exception as e:
         return {"message": f"Upload failed: {str(e)}"}
@@ -200,6 +243,10 @@ async def delete_file(filename: str):
 
     if os.path.exists(file_path):
         os.remove(file_path)
+                # ✅ REMOVE HASH ALSO
+        if filename in uploaded_file_hashes:
+            del uploaded_file_hashes[filename]
+            save_hashes()
 
         # rebuild index after delete
         build_index()
@@ -230,3 +277,4 @@ async def log_requests(request: Request, call_next):
     logger.info(f"Request end: {request.method} {request.url.path} - Status {response.status_code} - Time {process_time:.3f}s")
 
     return response
+
